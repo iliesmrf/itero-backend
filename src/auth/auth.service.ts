@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { OAuthUser, JwtPayload } from './auth.types';
+import { v4 as uuidv4 } from 'uuid';
+import { OAuthUser, JwtPayload, AnonymousUser } from './auth.types';
 
 @Injectable()
 export class AuthService {
@@ -20,6 +21,25 @@ export class AuthService {
 
     return this.jwtService.sign(payload, {
       secret:    process.env.JWT_SECRET || 'changeme-in-production',
+      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    });
+  }
+
+  /**
+   * Create anonymous user token
+   */
+  loginAnonymous(user: AnonymousUser): string {
+    const userId = uuidv4();
+    const payload: JwtPayload = {
+      sub: `anonymous:${userId}`,
+      email: '',
+      name: user.name || `Anonyme ${userId.slice(0, 4)}`,
+      avatar: user.avatar || '',
+      provider: 'anonymous',
+    };
+
+    return this.jwtService.sign(payload, {
+      secret: process.env.JWT_SECRET || 'changeme-in-production',
       expiresIn: process.env.JWT_EXPIRES_IN || '7d',
     });
   }

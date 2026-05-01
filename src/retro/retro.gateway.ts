@@ -9,7 +9,7 @@ import { Priority, Step } from './retro.types';
 import { FormatId } from './retro.formats';
 
 @WebSocketGateway({
-  cors: { origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true },
+  cors: { origin: process.env.FRONTEND_URL || 'http://itero.mantiq.fr:5173', credentials: true },
 })
 export class RetroGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
@@ -51,11 +51,11 @@ export class RetroGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // ── Room ──────────────────────────────────────────────────────────────────
   @SubscribeMessage('room:create')
-  handleCreateRoom(@ConnectedSocket() client: Socket) {
+  async handleCreateRoom(@ConnectedSocket() client: Socket) {
     const user = this.getUser(client);
     if (!user) return this.err(client, 'Non authentifié');
-    const room = this.retroService.createRoom();
-    const result = this.retroService.joinRoom(room.code, user.name, user.avatar);
+    const room = await this.retroService.createRoom();
+    const result = await this.retroService.joinRoom(room.code, user.name, user.avatar);
     if (!result) return this.err(client, 'Erreur création');
     client.join(room.code);
     this.socketMeta.set(client.id, { room: room.code, name: user.name, avatar: user.avatar });
@@ -63,13 +63,13 @@ export class RetroGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('room:join')
-  handleJoinRoom(@ConnectedSocket() client: Socket, @MessageBody() data: { code: string }) {
+  async handleJoinRoom(@ConnectedSocket() client: Socket, @MessageBody() data: { code: string }) {
     const user = this.getUser(client);
     if (!user) return this.err(client, 'Non authentifié');
     const code = data?.code?.trim().toUpperCase();
     if (!code) return this.err(client, 'Code requis');
-    if (!this.retroService.roomExists(code)) return this.err(client, 'Salle introuvable');
-    const result = this.retroService.joinRoom(code, user.name, user.avatar);
+    if (!(await this.retroService.roomExists(code))) return this.err(client, 'Salle introuvable');
+    const result = await this.retroService.joinRoom(code, user.name, user.avatar);
     if (!result) return this.err(client, 'Erreur rejoindre');
     client.join(code);
     this.socketMeta.set(client.id, { room: code, name: user.name, avatar: user.avatar });
@@ -79,89 +79,89 @@ export class RetroGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // ── Format ────────────────────────────────────────────────────────────────
   @SubscribeMessage('format:set')
-  handleSetFormat(@ConnectedSocket() client: Socket, @MessageBody() data: { format: FormatId }) {
+  async handleSetFormat(@ConnectedSocket() client: Socket, @MessageBody() data: { format: FormatId }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const room = this.retroService.setFormat(meta.room, data.format);
+    const room = await this.retroService.setFormat(meta.room, data.format);
     if (!room) return this.err(client, 'Format invalide');
     this.broadcast(meta.room, 'format:changed', { format: data.format, room });
   }
 
   // ── Step ──────────────────────────────────────────────────────────────────
   @SubscribeMessage('step:set')
-  handleSetStep(@ConnectedSocket() client: Socket, @MessageBody() data: { step: Step }) {
+  async handleSetStep(@ConnectedSocket() client: Socket, @MessageBody() data: { step: Step }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const room = this.retroService.setStep(meta.room, data.step);
+    const room = await this.retroService.setStep(meta.room, data.step);
     if (!room) return;
     this.broadcast(meta.room, 'step:changed', { step: data.step });
   }
 
   // ── Notes ─────────────────────────────────────────────────────────────────
   @SubscribeMessage('note:add')
-  handleAddNote(@ConnectedSocket() client: Socket, @MessageBody() data: { text: string; col: string }) {
+  async handleAddNote(@ConnectedSocket() client: Socket, @MessageBody() data: { text: string; col: string }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta || !data?.text?.trim()) return;
-    const note = this.retroService.addNote(meta.room, data.text, data.col, meta.name);
+    const note = await this.retroService.addNote(meta.room, data.text, data.col, meta.name);
     if (!note) return;
     this.broadcast(meta.room, 'note:added', note);
   }
 
   @SubscribeMessage('note:delete')
-  handleDeleteNote(@ConnectedSocket() client: Socket, @MessageBody() data: { noteId: string }) {
+  async handleDeleteNote(@ConnectedSocket() client: Socket, @MessageBody() data: { noteId: string }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const ok = this.retroService.deleteNote(meta.room, data.noteId, meta.name);
+    const ok = await this.retroService.deleteNote(meta.room, data.noteId, meta.name);
     if (!ok) return this.err(client, 'Suppression non autorisée');
     this.broadcast(meta.room, 'note:deleted', { noteId: data.noteId });
   }
 
   // ── Auto-cluster ──────────────────────────────────────────────────────────
   @SubscribeMessage('cluster:auto')
-  handleAutoClusters(@ConnectedSocket() client: Socket) {
+  async handleAutoClusters(@ConnectedSocket() client: Socket) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const clusters = this.retroService.autoClusters(meta.room);
+    const clusters = await this.retroService.autoClusters(meta.room);
     if (!clusters) return this.err(client, 'Erreur clustering');
     // Also send updated notes (with clusterId)
-    const room = this.retroService.getRoom(meta.room);
+    const room = await this.retroService.getRoom(meta.room);
     this.broadcast(meta.room, 'clusters:updated', { clusters, notes: room?.notes });
   }
 
   // ── Votes ─────────────────────────────────────────────────────────────────
   @SubscribeMessage('vote:cast')
-  handleCastVote(@ConnectedSocket() client: Socket, @MessageBody() data: { noteId: string }) {
+  async handleCastVote(@ConnectedSocket() client: Socket, @MessageBody() data: { noteId: string }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const room = this.retroService.castVote(meta.room, meta.name, data.noteId);
+    const room = await this.retroService.castVote(meta.room, meta.name, data.noteId);
     if (!room) return this.err(client, 'Plus de votes disponibles');
     this.broadcast(meta.room, 'votes:updated', room.votes);
   }
 
   @SubscribeMessage('vote:remove')
-  handleRemoveVote(@ConnectedSocket() client: Socket, @MessageBody() data: { noteId: string }) {
+  async handleRemoveVote(@ConnectedSocket() client: Socket, @MessageBody() data: { noteId: string }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const room = this.retroService.removeVote(meta.room, meta.name, data.noteId);
+    const room = await this.retroService.removeVote(meta.room, meta.name, data.noteId);
     if (!room) return;
     this.broadcast(meta.room, 'votes:updated', room.votes);
   }
 
   // ── Actions ───────────────────────────────────────────────────────────────
   @SubscribeMessage('action:add')
-  handleAddAction(@ConnectedSocket() client: Socket, @MessageBody() data: { text: string; owner: string; date: string; priority: Priority }) {
+  async handleAddAction(@ConnectedSocket() client: Socket, @MessageBody() data: { text: string; owner: string; date: string; priority: Priority }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta || !data?.text?.trim()) return;
-    const action = this.retroService.addAction(meta.room, data.text, data.owner || '', data.date || '', data.priority || 'medium', meta.name);
+    const action = await this.retroService.addAction(meta.room, data.text, data.owner || '', data.date || '', data.priority || 'medium', meta.name);
     if (!action) return;
     this.broadcast(meta.room, 'action:added', action);
   }
 
   @SubscribeMessage('action:delete')
-  handleDeleteAction(@ConnectedSocket() client: Socket, @MessageBody() data: { actionId: string }) {
+  async handleDeleteAction(@ConnectedSocket() client: Socket, @MessageBody() data: { actionId: string }) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const ok = this.retroService.deleteAction(meta.room, data.actionId);
+    const ok = await this.retroService.deleteAction(meta.room, data.actionId);
     if (!ok) return;
     this.broadcast(meta.room, 'action:deleted', { actionId: data.actionId });
   }
@@ -178,10 +178,10 @@ export class RetroGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('history:get')
-  handleGetHistory(@ConnectedSocket() client: Socket) {
+  async handleGetHistory(@ConnectedSocket() client: Socket) {
     const meta = this.socketMeta.get(client.id);
     if (!meta) return;
-    const history = this.retroService.getHistory(meta.room);
+    const history = await this.retroService.getHistory(meta.room);
     client.emit('history:data', history || []);
   }
 }

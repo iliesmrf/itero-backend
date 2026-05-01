@@ -1,12 +1,13 @@
 import {
-  Controller, Get, Req, Res, UseGuards, HttpCode,
+  Controller, Get, Post, Body, Req, Res, UseGuards, HttpCode,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt.guard';
+import { AnonymousUser } from './auth.types';
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://itero.mantiq.fr:5173';
 
 @Controller('auth')
 export class AuthController {
@@ -49,6 +50,15 @@ export class AuthController {
   @HttpCode(200)
   getMe(@Req() req: Request) {
     return req.user;
+  }
+
+  // ── Anonymous login ─────────────────────────────────────────────────
+
+  @Post('anonymous')
+  @HttpCode(200)
+  loginAnonymous(@Body() body: AnonymousUser) {
+    const token = this.authService.loginAnonymous(body);
+    return { token };
   }
 
   // ── Logout (client-side only — just returns 200) ─────────────────────

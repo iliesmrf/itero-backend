@@ -1,13 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import {
-  Room as RoomType, Note, Action, Priority, Participant, Step,
+  Room, Note, Action, Priority, Participant, Step,
   Cluster, RetrospectiveSummary, HistoryEntry,
 } from './retro.types';
 import { RETRO_FORMATS, FormatId } from './retro.formats';
-import { Room, RoomDocument } from './schemas/room.schema';
 
 // ── Color palette ─────────────────────────────────────────────────────────
 const PALETTE: [string, string][] = [
@@ -46,160 +43,96 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 
 @Injectable()
 export class RetroService {
-  constructor(
-    @InjectModel(Room.name) private roomModel: Model<RoomDocument>,
-  ) {}
+  private rooms = new Map<string, Room>();
 
   // ── Room lifecycle ────────────────────────────────────────────────────────
-  async createRoom(): Promise<RoomType> {
+  createRoom(): Room {
     let code: string;
-    let exists = true;
-
-    // Generate unique code
-    do {
-      code = genCode();
-      const result = await this.roomModel.exists({ code });
-      exists = result !== null;
-    } while (exists);
-
-    const room = new this.roomModel({
-      code,
-      step: 0,
+    do { code = genCode(); } while (this.rooms.has(code));
+    const room: Room = {
+      code, step: 0,
       format: 'start-stop-continue',
-      participants: {},
-      notes: {},
-      clusters: {},
-      votes: {},
-      actions: {},
-      summary: null,
-      history: [],
+      participants: {}, notes: {}, clusters: {}, votes: {}, actions: {},
+      summary: null, history: [],
       createdAt: Date.now(),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-    });
-
-    const saved = await room.save();
-    return this.toRoomType(saved);
+    };
+    this.rooms.set(code, room);
+    setTimeout(() => this.rooms.delete(code), 24 * 60 * 60 * 1000);
+    return room;
   }
 
-  async getRoom(code: string): Promise<RoomType | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
-    return room ? this.toRoomType(room) : null;
+  getRoom(code: string): Room | null {
+    return this.rooms.get(code.toUpperCase()) ?? null;
   }
 
-  async roomExists(code: string): Promise<boolean> {
-    return await this.roomModel.exists({ code: code.toUpperCase() }) !== null;
+  roomExists(code: string): boolean {
+    return this.rooms.has(code.toUpperCase());
   }
 
   // ── Format ────────────────────────────────────────────────────────────────
-  async setFormat(code: string, format: FormatId): Promise<RoomType | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  setFormat(code: string, format: FormatId): Room | null {
+    const room = this.getRoom(code);
     if (!room || !RETRO_FORMATS[format]) return null;
-
     room.format = format;
-    room.notes = {};
-    room.clusters = {};
-    room.votes = {};
-    room.markModified('notes');
-    room.markModified('clusters');
-    room.markModified('votes');
-
-    const updated = await room.save();
-    return this.toRoomType(updated);
+    // Reset notes/clusters when format changes (only allowed before collect)
+    room.notes = {}; room.clusters = {}; room.votes = {};
+    return room;
   }
 
   // ── Participants ──────────────────────────────────────────────────────────
-  async joinRoom(code: string, name: string, avatar = ''): Promise<{ room: RoomType; participant: Participant } | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  joinRoom(code: string, name: string, avatar = ''): { room: Room; participant: Participant } | null {
+    const room = this.getRoom(code);
     if (!room) return null;
-
     const [color, textColor] = pickColor(name);
-    const participant: Participant = {
-      id: uuidv4(),
-      name,
-      color,
-      textColor,
-      avatar,
-      joinedAt: Date.now()
-    };
-
+    const participant: Participant = { id: uuidv4(), name, color, textColor, avatar, joinedAt: Date.now() };
     room.participants[name] = participant;
-    room.markModified('participants');
-
-    const updated = await room.save();
-    return { room: this.toRoomType(updated), participant };
+    return { room, participant };
   }
 
-  async leaveRoom(code: string, name: string): Promise<RoomType | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  leaveRoom(code: string, name: string): Room | null {
+    const room = this.getRoom(code);
     if (!room) return null;
-
     delete room.participants[name];
-    room.markModified('participants');
-
-    const updated = await room.save();
-    return this.toRoomType(updated);
+    return room;
   }
 
   // ── Step ──────────────────────────────────────────────────────────────────
-  async setStep(code: string, step: Step): Promise<RoomType | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  setStep(code: string, step: Step): Room | null {
+    const room = this.getRoom(code);
     if (!room) return null;
-
     room.step = step;
-    const updated = await room.save();
-    return this.toRoomType(updated);
+    return room;
   }
 
   // ── Notes ─────────────────────────────────────────────────────────────────
-  async addNote(code: string, text: string, col: string, author: string): Promise<Note | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  addNote(code: string, text: string, col: string, author: string): Note | null {
+    const room = this.getRoom(code);
     if (!room) return null;
-
     const [authorColor] = pickColor(author);
-    const note: Note = {
-      id: uuidv4(),
-      text: text.trim().slice(0, 300),
-      col,
-      author,
-      authorColor,
-      createdAt: Date.now()
-    };
-
+    const note: Note = { id: uuidv4(), text: text.trim().slice(0, 300), col, author, authorColor, createdAt: Date.now() };
     room.notes[note.id] = note;
-    room.markModified('notes');
-
-    await room.save();
     return note;
   }
 
-  async deleteNote(code: string, noteId: string, requester: string): Promise<boolean> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  deleteNote(code: string, noteId: string, requester: string): boolean {
+    const room = this.getRoom(code);
     if (!room) return false;
-
     const note = room.notes[noteId];
     if (!note || note.author !== requester) return false;
-
     delete room.notes[noteId];
-
-    // Remove from votes
     Object.values(room.votes).forEach(v => delete v[noteId]);
-
     // Remove from clusters
     Object.values(room.clusters).forEach(c => {
       c.noteIds = c.noteIds.filter(id => id !== noteId);
     });
-
-    room.markModified('notes');
-    room.markModified('votes');
-    room.markModified('clusters');
-
-    await room.save();
     return true;
   }
 
   // ── Auto-clustering ───────────────────────────────────────────────────────
-  async autoClusters(code: string): Promise<Record<string, Cluster> | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  // Groups notes by column, then clusters within each column using
+  // greedy single-link clustering (Jaccard threshold = 0.2)
+  autoClusters(code: string): Record<string, Cluster> | null {
+    const room = this.getRoom(code);
     if (!room) return null;
 
     const notes = Object.values(room.notes);
@@ -210,13 +143,14 @@ export class RetroService {
       const colNotes = notes.filter(n => n.col === col.key);
       if (!colNotes.length) continue;
 
+      // Union-find style greedy clustering
       const groups: Note[][] = [];
       const assigned = new Set<string>();
 
       for (const note of colNotes) {
         if (assigned.has(note.id)) continue;
         const tokens = tokenize(note.text);
-
+        // Find existing group with highest similarity
         let bestGroup: Note[] | null = null;
         let bestScore = 0;
         for (const group of groups) {
@@ -231,18 +165,18 @@ export class RetroService {
         assigned.add(note.id);
       }
 
+      // Only create clusters for groups with 2+ notes
       for (const group of groups) {
         if (group.length < 2) {
+          // Single note — put in its own cluster with its text as label
           const c: Cluster = {
-            id: uuidv4(),
-            label: group[0].text.slice(0, 60),
-            noteIds: [group[0].id],
-            col: col.key,
-            createdAt: Date.now(),
+            id: uuidv4(), label: group[0].text.slice(0, 60),
+            noteIds: [group[0].id], col: col.key, createdAt: Date.now(),
           };
           clusters[c.id] = c;
           group[0].clusterId = c.id;
         } else {
+          // Multi-note cluster — label = most common significant words
           const allTokens = group.flatMap(n => [...tokenize(n.text)]);
           const freq = new Map<string, number>();
           allTokens.forEach(t => freq.set(t, (freq.get(t) || 0) + 1));
@@ -252,11 +186,8 @@ export class RetroService {
             .map(([w]) => w);
           const label = topWords.join(' · ') || group[0].text.slice(0, 40);
           const c: Cluster = {
-            id: uuidv4(),
-            label,
-            noteIds: group.map(n => n.id),
-            col: col.key,
-            createdAt: Date.now(),
+            id: uuidv4(), label,
+            noteIds: group.map(n => n.id), col: col.key, createdAt: Date.now(),
           };
           clusters[c.id] = c;
           group.forEach(n => { n.clusterId = c.id; });
@@ -265,87 +196,57 @@ export class RetroService {
     }
 
     room.clusters = clusters;
-    room.markModified('clusters');
-    room.markModified('notes');
-
-    await room.save();
     return clusters;
   }
 
   // ── Votes ─────────────────────────────────────────────────────────────────
-  async castVote(code: string, voter: string, noteId: string): Promise<RoomType | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  castVote(code: string, voter: string, noteId: string): Room | null {
+    const room = this.getRoom(code);
     if (!room || !room.notes[noteId]) return null;
-
     if (!room.votes[voter]) room.votes[voter] = {};
     const userVotes = room.votes[voter];
     const totalUsed = Object.values(userVotes).reduce((a, b) => a + b, 0);
     if (totalUsed >= 3) return null;
-
     userVotes[noteId] = (userVotes[noteId] || 0) + 1;
-    room.markModified('votes');
-
-    const updated = await room.save();
-    return this.toRoomType(updated);
+    return room;
   }
 
-  async removeVote(code: string, voter: string, noteId: string): Promise<RoomType | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  removeVote(code: string, voter: string, noteId: string): Room | null {
+    const room = this.getRoom(code);
     if (!room) return null;
-
     const userVotes = room.votes[voter];
     if (!userVotes || !userVotes[noteId]) return null;
-
     userVotes[noteId]--;
     if (userVotes[noteId] <= 0) delete userVotes[noteId];
-    room.markModified('votes');
-
-    const updated = await room.save();
-    return this.toRoomType(updated);
+    return room;
   }
 
   // ── Actions ───────────────────────────────────────────────────────────────
-  async addAction(code: string, text: string, owner: string, date: string, priority: Priority, addedBy: string): Promise<Action | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  addAction(code: string, text: string, owner: string, date: string, priority: Priority, addedBy: string): Action | null {
+    const room = this.getRoom(code);
     if (!room) return null;
-
-    const action: Action = {
-      id: uuidv4(),
-      text: text.trim().slice(0, 300),
-      owner,
-      date,
-      priority,
-      addedBy,
-      createdAt: Date.now()
-    };
-
+    const action: Action = { id: uuidv4(), text: text.trim().slice(0, 300), owner, date, priority, addedBy, createdAt: Date.now() };
     room.actions[action.id] = action;
-    room.markModified('actions');
-
-    await room.save();
     return action;
   }
 
-  async deleteAction(code: string, actionId: string): Promise<boolean> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  deleteAction(code: string, actionId: string): boolean {
+    const room = this.getRoom(code);
     if (!room || !room.actions[actionId]) return false;
-
     delete room.actions[actionId];
-    room.markModified('actions');
-
-    await room.save();
     return true;
   }
 
   // ── Summary + History ─────────────────────────────────────────────────────
   async generateSummary(code: string): Promise<RetrospectiveSummary | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+    const room = this.getRoom(code);
     if (!room) return null;
 
     const notes = Object.values(room.notes);
     const actions = Object.values(room.actions);
     const format = RETRO_FORMATS[room.format];
 
+    // Build vote totals
     const totals: Record<string, number> = {};
     Object.values(room.votes).forEach(uv => {
       Object.entries(uv).forEach(([id, c]) => { totals[id] = (totals[id] || 0) + c; });
@@ -356,6 +257,7 @@ export class RetroService {
       .sort((a, b) => b.votes - a.votes)
       .slice(0, 10);
 
+    // Build prompt for Claude API
     const formatName = format.name;
     const notesByCol = format.cols.map(col => {
       const colNotes = notes.filter(n => n.col === col.key);
@@ -404,6 +306,7 @@ Sois concis, factuel et orienté action. Maximum 400 mots.`;
       const data = await res.json() as any;
       summaryText = data?.content?.[0]?.text || '';
     } catch (e) {
+      // Fallback: generate summary without AI
       summaryText = this.buildFallbackSummary(room, topVotedNotes, actions);
     }
 
@@ -415,13 +318,14 @@ Sois concis, factuel et orienté action. Maximum 400 mots.`;
     };
 
     room.summary = summary;
+
+    // Save to history
     this.saveToHistory(room);
 
-    await room.save();
     return summary;
   }
 
-  private buildFallbackSummary(room: any, topVoted: any[], actions: Action[]): string {
+  private buildFallbackSummary(room: Room, topVoted: any[], actions: Action[]): string {
     const format = RETRO_FORMATS[room.format];
     const noteCount = Object.keys(room.notes).length;
     const participants = Object.keys(room.participants);
@@ -445,7 +349,7 @@ Sois concis, factuel et orienté action. Maximum 400 mots.`;
     return lines.join('\n');
   }
 
-  private saveToHistory(room: any): void {
+  private saveToHistory(room: Room): void {
     const entry: HistoryEntry = {
       id: uuidv4(),
       createdAt: Date.now(),
@@ -457,29 +361,12 @@ Sois concis, factuel et orienté action. Maximum 400 mots.`;
       actions: Object.values(room.actions),
     };
     room.history.unshift(entry);
+    // Keep last 20 entries
     if (room.history.length > 20) room.history = room.history.slice(0, 20);
-    room.markModified('history');
   }
 
-  async getHistory(code: string): Promise<HistoryEntry[] | null> {
-    const room = await this.roomModel.findOne({ code: code.toUpperCase() }).exec();
+  getHistory(code: string): HistoryEntry[] | null {
+    const room = this.getRoom(code);
     return room ? room.history : null;
-  }
-
-  // Helper to convert MongoDB document to RoomType
-  private toRoomType(doc: RoomDocument): RoomType {
-    return {
-      code: doc.code,
-      step: doc.step,
-      format: doc.format,
-      participants: doc.participants,
-      notes: doc.notes,
-      clusters: doc.clusters,
-      votes: doc.votes,
-      actions: doc.actions,
-      summary: doc.summary,
-      history: doc.history,
-      createdAt: doc.createdAt,
-    };
   }
 }
