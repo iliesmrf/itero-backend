@@ -7,7 +7,7 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { AnonymousUser } from './auth.types';
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://itero.mantiq.fr:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
 @Controller('auth')
 export class AuthController {

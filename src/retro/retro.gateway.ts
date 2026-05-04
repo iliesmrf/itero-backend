@@ -77,6 +77,22 @@ export class RetroGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.broadcast(code, 'participant:joined', result.participant);
   }
 
+  @SubscribeMessage('room:leave')
+  async handleLeaveRoom(@ConnectedSocket() client: Socket) {
+    const meta = this.socketMeta.get(client.id);
+    if (!meta) return this.err(client, 'Non authentifié');
+
+    const room = await this.retroService.leaveRoom(meta.room, meta.name);
+    if (room) {
+      this.broadcast(meta.room, 'room:updated', room);
+      this.broadcast(meta.room, 'participant:left', { name: meta.name });
+    }
+
+    client.leave(meta.room);
+    this.socketMeta.delete(client.id);
+    client.emit('room:left');
+  }
+
   // ── Format ────────────────────────────────────────────────────────────────
   @SubscribeMessage('format:set')
   async handleSetFormat(@ConnectedSocket() client: Socket, @MessageBody() data: { format: FormatId }) {
